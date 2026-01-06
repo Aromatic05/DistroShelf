@@ -440,12 +440,20 @@ impl RootStore {
     pub fn create_container(&self, create_args: CreateArgs) {
         let this = self.clone();
         let name = create_args.name.to_string();
+        let name_for_closure = name.clone();
         let task = self.create_task(&name, "create", move |task| async move {
             task.set_description(
                 "Creation requires downloading the container image, which may take some time...",
             );
             let child = this.distrobox().create(create_args).await?;
-            task.handle_child_output(child).await
+            task.handle_child_output(child).await?;
+            
+            // After container creation completes, try to modify the desktop file
+            if let Err(e) = this.distrobox().modify_desktop_file_after_create(&name_for_closure).await {
+                tracing::warn!(error = ?e, container = %name_for_closure, "failed to update desktop file after create");
+            }
+            
+            Ok(())
         });
         self.view_task(&task);
     }

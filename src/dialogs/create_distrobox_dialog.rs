@@ -364,9 +364,10 @@ impl CreateDistroboxDialog {
 
                 if this.imp().home_row_expander.enables_expansion() {
                     let current = this.home_folder();
+                    let default_prefix = format!("{}/.local/share/distrobox/", home_dir.trim_end_matches('/'));
                     let should_replace = match current.as_deref() {
                         None => true,
-                        Some(s) => s.starts_with("~/.local/share/distrobox/"),
+                        Some(s) => s.starts_with(&default_prefix),
                     };
                     if should_replace {
                         this.set_home_folder(Some(default_home));

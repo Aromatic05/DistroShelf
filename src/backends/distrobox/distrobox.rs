@@ -1010,7 +1010,7 @@ impl Distrobox {
     /// at `$XDG_DATA_HOME/applications/<name>.desktop` (or fallback to
     /// `$HOME/.local/share/applications/<name>.desktop`) by prepending
     /// `LinuxBox;` after the `Categories=` key if not already present.
-    async fn modify_desktop_file_after_create(&self, name: &str) -> Result<(), Error> {
+    pub async fn modify_desktop_file_after_create(&self, name: &str) -> Result<(), Error> {
         if name.is_empty() {
             return Ok(());
         }
@@ -1086,19 +1086,23 @@ impl Distrobox {
     }
     // create
     pub async fn create(&self, args: CreateArgs) -> Result<Box<dyn Child + Send>, Error> {
-        // keep the requested container name before moving `args` into create_cmd
-        let name = args.name.clone();
-        let cmd = self.create_cmd(args);
-        let child = self.cmd_spawn(cmd)?;
-
-        // Try to update the host desktop file; don't fail the creation if this fails
-        if !name.0.is_empty() {
-            if let Err(e) = self.modify_desktop_file_after_create(&name.0).await {
-                warn!(error = ?e, container = %name.0, "failed to update desktop file after create");
+        // Expand any leading `~` in the requested home path to the host HOME
+        // Prefer resolving via the CommandRunner (works under Flatpak). If
+        // resolution fails, fall back to the current process HOME.
+        let mut args = args;
+        if let Some(h) = args.home_path.as_deref() {
+            if h == "~" || h.starts_with("~/") {
+                let resolved_home = match crate::fakers::resolve_host_env_via_runner(&self.cmd_runner, "HOME").await {
+                    Ok(Some(s)) if !s.trim().is_empty() => s,
+                    _ => std::env::var("HOME").unwrap_or_else(|_| "~".into()),
+                };
+                let suffix = if h == "~" { "" } else { &h[1..] };
+                args.home_path = Some(format!("{}{}", resolved_home.trim_end_matches('/'), suffix));
             }
         }
 
-        Ok(child)
+        let cmd = self.create_cmd(args);
+        self.cmd_spawn(cmd)
     }
     // create --compatibility
     pub async fn list_images(&self) -> Result<Vec<String>, Error> {
