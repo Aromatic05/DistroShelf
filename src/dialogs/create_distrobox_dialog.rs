@@ -416,6 +416,7 @@ impl CreateDistroboxDialog {
         ));
 
         let this = self.clone();
+        let this_for_file_row = this.clone();
         let home_row = adw::ActionRow::new();
         self.configure_file_row(
             &home_row,
@@ -423,7 +424,7 @@ impl CreateDistroboxDialog {
             FileRowSelection::Folder,
             None, // No filter for folders
             move |path| {
-                this.set_home_folder(Some(path.display().to_string()));
+                this_for_file_row.set_home_folder(Some(path.display().to_string()));
             },
             clone!(
                 #[weak(rename_to=this)]
@@ -434,11 +435,21 @@ impl CreateDistroboxDialog {
                 }
             ),
         );
-        imp.home_row_expander
-            .set_title(&gettext("Custom Home Directory"));
+        imp.home_row_expander.set_title(&gettext("Custom Home Directory"));
         imp.home_row_expander.set_show_enable_switch(true);
-        imp.home_row_expander.set_enable_expansion(false);
+        // Default to enabled and set a sensible default home path based on the current name
+        imp.home_row_expander.set_enable_expansion(true);
         imp.home_row_expander.add_row(&home_row);
+
+        // Initialize default home folder to $HOME/.local/share/distrobox/<name>
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+        let default_home = format!("{}/.local/share/distrobox/{}", home_dir, imp.name_row.text());
+        this.set_home_folder(Some(default_home));
+        // Reflect in the UI subtitle
+        home_row.set_subtitle(this.home_folder().as_deref().unwrap_or(""));
+
+        // Use a cloned handle for the expander callback so `home_row` remains usable
+        let home_row_for_expander = home_row.clone();
         imp.home_row_expander
             .connect_enable_expansion_notify(clone!(
                 #[weak(rename_to=this)]
@@ -447,7 +458,7 @@ impl CreateDistroboxDialog {
                     if !expander.enables_expansion() {
                         this.set_home_folder(None::<&str>);
                     }
-                    home_row.set_subtitle(this.home_folder().as_deref().unwrap_or(""));
+                    home_row_for_expander.set_subtitle(this.home_folder().as_deref().unwrap_or(""));
                 }
             ));
 
@@ -505,6 +516,36 @@ impl CreateDistroboxDialog {
             self,
             move |_entry| {
                 this.imp().errors_query.refetch();
+            }
+        ));
+
+        // Keep the default home folder in sync with the container name while the
+        // expander is enabled and the user hasn't selected a custom path.
+        let home_row_for_name_change = home_row.clone();
+        imp.name_row.connect_changed(clone!(
+            #[weak(rename_to=this)]
+            self,
+            #[strong]
+            home_row_for_name_change,
+            move |entry| {
+                let name = entry.text().to_string();
+                let home_dir = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+                let default_home = format!("{}/.local/share/distrobox/{}", home_dir, name);
+
+                if this.imp().home_row_expander.enables_expansion() {
+                    let current = this.home_folder();
+                    let default_prefix = format!("{}/.local/share/distrobox/", home_dir.trim_end_matches('/'));
+                    let should_replace = match current.as_deref() {
+                        None => true,
+                        Some(s) => s.starts_with(&default_prefix),
+                    };
+                    if should_replace {
+                        this.set_home_folder(Some(default_home));
+                        if let Some(h) = this.home_folder() {
+                            home_row_for_name_change.set_subtitle(&h);
+                        }
+                    }
+                }
             }
         ));
 

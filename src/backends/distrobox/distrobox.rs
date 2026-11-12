@@ -656,11 +656,87 @@ impl Distrobox {
         let cmd = domain_assemble_from_url_cmd(url, self.dbcmd());
         self.cmd_spawn(cmd)
     }
+
+    /// After creating a container, try to update the host desktop file
+    /// at `$XDG_DATA_HOME/applications/<name>.desktop` (or fallback to
+    /// `$HOME/.local/share/applications/<name>.desktop`) by prepending
+    /// `LinuxBox;` after the `Categories=` key if not already present.
+    pub async fn modify_desktop_file_after_create(&self, name: &str) -> Result<(), Error> {
+        if name.is_empty() {
+            return Ok(());
+        }
+
+        // Resolve the host applications path through the command runner.
+        let host_env = match crate::fakers::resolve_host_env(&self.cmd_runner).await {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(error = ?e, "could not resolve host environment, skipping desktop update");
+                return Ok(());
+            }
+        };
+        let apps_path = match self.host_applications_path(&host_env).await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = ?e, "could not resolve host applications path, skipping desktop update");
+                return Ok(());
+            }
+        };
+
+        let desktop_path = apps_path.join(format!("{}.desktop", name));
+        if !desktop_path.exists() {
+            // Nothing to do if desktop file isn't present yet
+            info!(path = %desktop_path.display(), "desktop file not found, skipping desktop update");
+            return Ok(());
+        }
+
+        // Read, modify, and write back. Any IO errors bubble as Error::StdoutRead
+        let content = std::fs::read_to_string(&desktop_path)?;
+        let mut changed = false;
+        let mut out_lines: Vec<String> = Vec::new();
+        for line in content.lines() {
+            if line.starts_with("Categories=") {
+                if line.contains("LinuxBox") {
+                    out_lines.push(line.to_string());
+                } else {
+                    let rest = &line["Categories=".len()..];
+                    out_lines.push(format!("Categories=LinuxBox;{}", rest));
+                    changed = true;
+                }
+            } else {
+                out_lines.push(line.to_string());
+            }
+        }
+
+        if changed {
+            let new_content = out_lines.join("\n");
+            std::fs::write(&desktop_path, new_content)?;
+            info!(path = %desktop_path.display(), "updated desktop file Categories field");
+        } else {
+            info!(path = %desktop_path.display(), "no Categories update needed");
+        }
+
+        Ok(())
+    }
     fn create_cmd(&self, args: CreateArgs) -> Command {
         domain_create_cmd(&args, self.dbcmd())
     }
     // create
     pub async fn create(&self, args: CreateArgs) -> Result<Box<dyn Child + Send>, Error> {
+        // Expand any leading `~` in the requested home path to the host HOME
+        // Prefer resolving via the CommandRunner (works under Flatpak). If
+        // resolution fails, fall back to the current process HOME.
+        let mut args = args;
+        if let Some(h) = args.home_path.as_deref() {
+            if h == "~" || h.starts_with("~/") {
+                let resolved_home = match crate::fakers::resolve_host_env_via_runner(&self.cmd_runner, "HOME").await {
+                    Ok(Some(s)) if !s.trim().is_empty() => s,
+                    _ => std::env::var("HOME").unwrap_or_else(|_| "~".into()),
+                };
+                let suffix = if h == "~" { "" } else { &h[1..] };
+                args.home_path = Some(format!("{}{}", resolved_home.trim_end_matches('/'), suffix));
+            }
+        }
+
         let cmd = self.create_cmd(args);
         self.cmd_spawn(cmd)
     }
