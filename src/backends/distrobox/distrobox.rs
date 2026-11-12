@@ -728,10 +728,11 @@ impl Distrobox {
         let mut args = args;
         if let Some(h) = args.home_path.as_deref() {
             if h == "~" || h.starts_with("~/") {
-                let resolved_home = match crate::fakers::resolve_host_env_via_runner(&self.cmd_runner, "HOME").await {
-                    Ok(Some(s)) if !s.trim().is_empty() => s,
-                    _ => std::env::var("HOME").unwrap_or_else(|_| "~".into()),
-                };
+                let resolved_home = crate::fakers::resolve_host_env(&self.cmd_runner)
+                    .await
+                    .ok()
+                    .and_then(|env| env.get("HOME").filter(|home| !home.trim().is_empty()).cloned())
+                    .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "~".into()));
                 let suffix = if h == "~" { "" } else { &h[1..] };
                 args.home_path = Some(format!("{}{}", resolved_home.trim_end_matches('/'), suffix));
             }
